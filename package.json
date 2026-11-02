@@ -1,0 +1,26 @@
+{
+  "name": "mahabharat-ai-studio",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=20.9"
+  },
+  "scripts": {
+    "dev": "concurrently -n api,worker,web -c blue,magenta,green \"npm run dev -w @mas/api\" \"npm run worker:dev -w @mas/api\" \"npm run dev -w @mas/web\"",
+    "build": "npm run build -w @mas/web",
+    "typecheck": "npm run typecheck -w @mas/shared && npm run typecheck -w @mas/api && npm run typecheck -w @mas/web",
+    "test": "npm run test -w @mas/api",
+    "db:init": "npm run db:init -w @mas/api",
+    "infra:up": "bash scripts/infra.sh up",
+    "infra:down": "bash scripts/infra.sh down",
+    "infra:status": "bash scripts/infra.sh status"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "typescript": "^5.7.2"
+  }
+}
