@@ -51,6 +51,26 @@ function fitFilter(input: string, out: string) {
   );
 }
 
+/**
+ * Turns a still image into a scene clip: the whole image slowly grows from 90% to 100% of the frame over a
+ * blurred copy of itself. The image is never cropped, so a visible watermark on it stays visible.
+ */
+export async function stillToClip(image: string, dest: string, length: number, fps = 24) {
+  const t = length.toFixed(3);
+  await ffmpeg(
+    [
+      '-loop', '1', '-framerate', String(fps), '-t', t, '-i', image,
+      '-filter_complex',
+      `[0:v]split=2[bgsrc][fgsrc];` +
+        `[bgsrc]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},boxblur=28:2,eq=brightness=-0.06[bg];` +
+        `[fgsrc]scale=${W}:${H}:force_original_aspect_ratio=decrease,scale=w='trunc(iw*(0.9+0.1*t/${t})/2)*2':h=-2:eval=frame[fg];` +
+        `[bg][fg]overlay=(W-w)/2:(H-h)/2:eval=frame,setsar=1,format=yuv420p[v]`,
+      '-map', '[v]', '-r', String(fps), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-an', '-movflags', '+faststart', dest,
+    ],
+    { timeoutMs: 5 * 60_000 },
+  );
+}
+
 /** Normalises one generated clip to exactly `length` seconds at 1080×1920/fps with a stereo audio track. */
 export async function normalizeClip(src: string, dest: string, length: number, opts: Pick<RenderInput, 'fps' | 'colorGrade' | 'allowPushIn'>) {
   const info = await probe(src);

@@ -12,7 +12,7 @@ import { SimpleSelect } from '../ui/select';
 import { Slider, Switch } from '../ui/misc';
 import { Badge } from '../ui/badge';
 import { SaveBar, SecretInput, useDraft } from './shared';
-import { formatDate } from '@/lib/utils';
+import { formatDate, voiceLabel } from '@/lib/utils';
 
 export function ElevenTab({ data }: { data: SettingsResponse }) {
   const { draft, set, dirty } = useDraft(data.settings.elevenlabs);
@@ -79,7 +79,7 @@ export function ElevenTab({ data }: { data: SettingsResponse }) {
               value={draft.voiceId}
               onValueChange={(v) => set({ voiceId: v })}
               placeholder={configured ? (voices.isLoading ? 'Loading voices…' : 'Select a voice') : 'Add an API key first'}
-              options={[...(draft.voiceId && !voices.data?.some((v) => v.voiceId === draft.voiceId) ? [{ value: draft.voiceId, label: draft.voiceId }] : []), ...(voices.data ?? []).map((v) => ({ value: v.voiceId, label: `${v.name} (${v.category})` }))]}
+              options={[...(draft.voiceId && !voices.data?.some((v) => v.voiceId === draft.voiceId) ? [{ value: draft.voiceId, label: draft.voiceId }] : []), ...(voices.data ?? []).map((v) => ({ value: v.voiceId, label: voiceLabel(v) }))]}
             />
           </Field>
           <Field label="Model">

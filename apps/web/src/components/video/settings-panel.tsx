@@ -4,6 +4,7 @@ import { Play, Square } from 'lucide-react';
 import { NARRATION_STYLES, VISUAL_STYLES, type VideoGenerationSettings } from '@mas/shared';
 import { useMusic, useVideoProviders, useVoices } from '@/lib/queries/video';
 import { ApiError } from '@/lib/api';
+import { voiceLabel } from '@/lib/utils';
 import { Field } from '../ui/label';
 import { SimpleSelect } from '../ui/select';
 import { Slider } from '../ui/misc';
@@ -46,7 +47,7 @@ export function VideoSettingsPanel({ value, onChange, concurrency, onConcurrency
               value={value.voiceId}
               onValueChange={(v) => set({ voiceId: v })}
               placeholder={voices.isLoading ? 'Loading voices…' : 'Use default voice from settings'}
-              options={[{ value: '', label: 'Default voice from settings' }, ...(voices.data ?? []).map((v) => ({ value: v.voiceId, label: `${v.name}${v.labels?.accent ? ` · ${v.labels.accent}` : ''}${v.category ? ` (${v.category})` : ''}` }))]}
+              options={[{ value: '', label: 'Default voice from settings' }, ...(voices.data ?? []).map((v) => ({ value: v.voiceId, label: voiceLabel(v) }))]}
             />
             <Button size="icon" variant="outline" disabled={!voice?.previewUrl} onClick={preview} aria-label="Preview voice">
               {playing ? <Square /> : <Play />}

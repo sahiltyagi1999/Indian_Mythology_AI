@@ -43,7 +43,7 @@ import { segmentsFromWords, syntheticAlignment, wordsFromAlignment, type Segment
 import { buildCues, loadFonts, toAss, toSrt, writeSubtitleOverlay } from './subtitles';
 import { probe } from './ffmpeg';
 import { singleFlight } from '../../lib/lock';
-import { renderVideo } from './render';
+import { renderVideo, stillToClip } from './render';
 import { onTerminal, type JobContext } from '../../workers/runtime';
 
 type Id = string | Types.ObjectId;
@@ -725,17 +725,41 @@ export async function retryScene(videoId: string, sceneNumber: number) {
  * Attaches a user-made clip to a scene (manual provider, or to replace a failed generated scene). The clip is
  * stored like a generated one; once every scene has a clip the render is queued automatically.
  */
-export async function uploadSceneClip(videoId: string, sceneNumber: number, file: { path: string; originalName: string }) {
+export async function uploadSceneClip(videoId: string, sceneNumber: number, file: { path: string; originalName: string; mimeType: string }) {
   const video = await VideoAssetModel.findById(videoId);
   if (!video) throw notFound('Video');
   if (!['generating_scenes', 'failed'].includes(video.status) || !video.planHash) throw conflict(`Clips can be uploaded once scenes are planned (video is ${video.status})`);
   const scene = await VideoSceneModel.findOne({ videoId, sceneNumber });
   if (!scene) throw notFound('Scene');
   if (scene.status === 'generating') throw conflict('Scene is being generated');
-  const info = await probe(file.path).catch(() => null);
-  if (!info?.hasVideo || info.duration < 0.5) throw new AppError('The file is not a playable video clip', 422, 'INVALID_CLIP');
-  const key = keys.sceneClip(String(video.sourceId), video.episodeNumber ?? 0, `u${sha256(await fs.readFile(file.path))}`);
-  await storage().putFile(key, file.path, { move: true });
+  const isImage = file.mimeType.startsWith('image/') || /\.(jpe?g|png|webp)$/i.test(file.originalName);
+  let clipFile = file.path;
+  let work: string | null = null;
+  try {
+    if (isImage) {
+      // A still becomes a slow zoom clip as long as the scene (plus a little room for the transition).
+      work = await fs.mkdtemp(path.join(os.tmpdir(), 'mas-still-'));
+      clipFile = path.join(work, 'still.mp4');
+      await stillToClip(file.path, clipFile, Math.max(2, scene.duration ?? 6) + 0.3).catch(() => {
+        throw new AppError('The image could not be read', 422, 'INVALID_CLIP');
+      });
+    }
+    return await attachClip(video, scene, clipFile, { uploaded: true, fileName: file.originalName, kind: isImage ? 'image' : 'video', uploadedAt: new Date() });
+  } finally {
+    if (work) await fs.rm(work, { recursive: true, force: true });
+  }
+}
+
+async function attachClip(
+  video: InstanceType<typeof VideoAssetModel>,
+  scene: InstanceType<typeof VideoSceneModel>,
+  clipFile: string,
+  meta: Record<string, unknown>,
+) {
+  const info = await probe(clipFile).catch(() => null);
+  if (!info?.hasVideo || info.duration < 0.5) throw new AppError('The file is not a playable video clip or image', 422, 'INVALID_CLIP');
+  const key = keys.sceneClip(String(video.sourceId), video.episodeNumber ?? 0, `u${sha256(await fs.readFile(clipFile))}`);
+  await storage().putFile(key, clipFile, { move: true });
   Object.assign(scene, {
     status: 'completed',
     clipPath: key,
@@ -743,13 +767,13 @@ export async function uploadSceneClip(videoId: string, sceneNumber: number, file
     hasAudio: info.hasAudio,
     cost: 0,
     attempts: scene.attempts + 1,
-    providerMeta: { uploaded: true, fileName: file.originalName, uploadedAt: new Date() },
+    providerMeta: meta,
     reusedFrom: undefined,
     error: undefined,
   });
   await scene.save();
   if (video.status === 'failed') await setVideo(video._id, { status: 'generating_scenes', error: null });
-  await afterScene(videoId);
+  await afterScene(String(video._id));
   return scene;
 }
 

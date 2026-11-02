@@ -199,7 +199,15 @@ describe('Workflow B — batch video generation', () => {
 
     const bad = await request(h.app).post(`/api/videos/${vid}/scenes/1/clip`).attach('file', Buffer.from('not a video'), 'fake.mp4');
     expect(bad.status).toBe(422);
-    for (const s of scenes) await request(h.app).post(`/api/videos/${vid}/scenes/${s.sceneNumber}/clip`).attach('file', state.videoClipPath!).expect(200);
+    // Scene 1 gets a still image (made into a zoom clip as long as the scene), the rest get video clips.
+    const still = execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=576x1024', '-frames:v', '1', '-f', 'image2pipe', '-vcodec', 'png', '-']);
+    const img = await request(h.app).post(`/api/videos/${vid}/scenes/1/clip`).attach('file', still, { filename: 'scene1.png', contentType: 'image/png' });
+    expect(img.status).toBe(200);
+    expect(img.body.scene.providerMeta.kind).toBe('image');
+    const stillInfo = await probe(await storage().localPath(img.body.scene.clipPath));
+    expect([stillInfo.width, stillInfo.height]).toEqual([1080, 1920]);
+    expect(stillInfo.duration).toBeGreaterThanOrEqual(scenes[0]!.duration!);
+    for (const s of scenes.slice(1)) await request(h.app).post(`/api/videos/${vid}/scenes/${s.sceneNumber}/clip`).attach('file', state.videoClipPath!).expect(200);
 
     const done = await waitFor(async () => {
       const v = await VideoAssetModel.findById(vid).lean();

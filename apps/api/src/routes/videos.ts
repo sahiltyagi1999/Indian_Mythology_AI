@@ -32,7 +32,7 @@ fs.mkdirSync(clipDir, { recursive: true });
 const clipUpload = multer({
   dest: clipDir,
   limits: { fileSize: 500 * 1024 * 1024, files: 1 },
-  fileFilter: (_req, file, cb) => cb(null, file.mimetype.startsWith('video/') || /\.(mp4|mov|webm|m4v)$/i.test(file.originalname)),
+  fileFilter: (_req, file, cb) => cb(null, /^(video|image)\//.test(file.mimetype) || /\.(mp4|mov|webm|m4v|jpe?g|png|webp)$/i.test(file.originalname)),
 });
 
 const subtitleSchema = z
@@ -127,14 +127,14 @@ videosRouter.post(
   }),
 );
 
-/** Upload a user-made clip for one scene (field "file"). */
+/** Upload a user-made clip or still image for one scene (field "file"). */
 videosRouter.post(
   '/:id/scenes/:n/clip',
   clipUpload.single('file'),
   ah(async (req, res) => {
-    if (!req.file) throw new AppError('A video clip is required (field "file")', 400, 'NO_FILE');
+    if (!req.file) throw new AppError('A video clip or image is required (field "file")', 400, 'NO_FILE');
     try {
-      res.json({ scene: await uploadSceneClip(String(objectId(req.params.id!)), Number(req.params.n), { path: req.file.path, originalName: req.file.originalname }) });
+      res.json({ scene: await uploadSceneClip(String(objectId(req.params.id!)), Number(req.params.n), { path: req.file.path, originalName: req.file.originalname, mimeType: req.file.mimetype }) });
     } finally {
       await fsp.rm(req.file.path, { force: true });
     }

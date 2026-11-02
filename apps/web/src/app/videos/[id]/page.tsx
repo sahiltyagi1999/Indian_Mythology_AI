@@ -15,6 +15,11 @@ import { Progress } from '@/components/ui/misc';
 import { VideoActions } from '@/components/video/actions';
 import { elapsed, fileUrl, formatBytes, formatDate, formatSeconds, formatUsd } from '@/lib/utils';
 
+/** The scene prompt is written for video; for a still, ask for one frame and drop the camera move. */
+function imagePrompt(prompt: string) {
+  return `Create one cinematic still image in vertical 9:16 format. No text, captions or logos.\n${prompt.replace(/ Camera: [^.]*\./, '')}`;
+}
+
 export default function VideoDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
@@ -37,10 +42,10 @@ export default function VideoDetailPage({ params }: { params: Promise<{ id: stri
     uploadFor.current = n;
     fileInput.current?.click();
   };
-  const copyPrompt = async (n: number, prompt: string) => {
+  const copyPrompt = async (n: number, prompt: string, kind: 'Video' | 'Image') => {
     try {
       await navigator.clipboard.writeText(prompt);
-      toast.success(`Scene ${n} prompt copied`);
+      toast.success(`${kind} prompt for scene ${n} copied`);
     } catch {
       toast.error('Could not copy; select the prompt text instead');
     }
@@ -51,7 +56,7 @@ export default function VideoDetailPage({ params }: { params: Promise<{ id: stri
       <input
         ref={fileInput}
         type="file"
-        accept="video/*,.mp4,.mov,.webm"
+        accept="video/*,image/*,.mp4,.mov,.webm,.jpg,.jpeg,.png,.webp"
         className="hidden"
         onChange={(e) => {
           const file = e.target.files?.[0];
@@ -176,8 +181,9 @@ export default function VideoDetailPage({ params }: { params: Promise<{ id: stri
             <Card className="space-y-1 border-primary/30 bg-primary/5 p-4 text-sm">
               <p className="font-semibold">Manual clips · {scenes.filter((x) => x.status === 'completed').length}/{scenes.length} uploaded</p>
               <p className="text-muted-foreground">
-                For each scene: copy the prompt, create the clip in Flow or the Gemini app in a vertical 9:16 frame (8 s is fine), download it and upload it here. The
-                video renders automatically with narration and subtitles once every scene has a clip.
+                For each scene: copy the video prompt (for a clip from Gemini or Flow) or the image prompt (for a still), make it in vertical 9:16, download it and
+                upload it here. Stills become a slow zoom shot; clips and stills can be mixed. The video renders automatically with narration and subtitles once
+                every scene has one.
               </p>
             </Card>
           )}
@@ -212,12 +218,17 @@ export default function VideoDetailPage({ params }: { params: Promise<{ id: stri
                   {canUpload && sc.status !== 'generating' && (manual || sc.status === 'failed') && (
                     <span className={`flex gap-2 ${sc.status === 'failed' && !manual ? '' : 'ml-auto'}`}>
                       {manual && (
-                        <Button size="sm" variant="outline" className="h-7" onClick={() => void copyPrompt(sc.sceneNumber, sc.prompt)}>
-                          <Copy /> Copy prompt
-                        </Button>
+                        <>
+                          <Button size="sm" variant="outline" className="h-7" onClick={() => void copyPrompt(sc.sceneNumber, sc.prompt, 'Video')}>
+                            <Copy /> Copy video prompt
+                          </Button>
+                          <Button size="sm" variant="outline" className="h-7" onClick={() => void copyPrompt(sc.sceneNumber, imagePrompt(sc.prompt), 'Image')}>
+                            <Copy /> Copy image prompt
+                          </Button>
+                        </>
                       )}
                       <Button size="sm" variant={sc.status === 'completed' ? 'outline' : 'default'} className="h-7" loading={uploadClip.isPending && uploadClip.variables?.n === sc.sceneNumber} onClick={() => pickClip(sc.sceneNumber)}>
-                        <Upload /> {sc.status === 'completed' ? 'Replace clip' : 'Upload clip'}
+                        <Upload /> {sc.status === 'completed' ? 'Replace' : 'Upload image / clip'}
                       </Button>
                     </span>
                   )}

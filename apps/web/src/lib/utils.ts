@@ -23,6 +23,12 @@ export function formatUsd(v?: number | null, digits?: number): string {
   return `$${v.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d })}`;
 }
 
+/** ElevenLabs only allows its premade voices through the API on the free plan; library voices need a paid plan. */
+export function voiceLabel(v: { name: string; category?: string; labels?: Record<string, string> }): string {
+  const accent = v.labels?.accent ? ` · ${v.labels.accent}` : '';
+  return `${v.name}${accent} (${v.category === 'premade' ? 'premade · works on free plan' : `${v.category ?? 'library'} · paid plan only`})`;
+}
+
 export function formatSeconds(s?: number | null): string {
   if (s === undefined || s === null || Number.isNaN(s)) return '—';
   if (s < 60) return `${s.toFixed(s < 10 ? 1 : 0)}s`;
