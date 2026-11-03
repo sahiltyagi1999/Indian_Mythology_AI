@@ -5,6 +5,7 @@ import { DEFAULT_PRICING } from '../../src/services/settings';
 import { decryptSecret, encryptSecret, maskSecret, stableHash } from '../../src/lib/crypto';
 import { chooseModel } from '../../src/providers/llm/gemini';
 import { scrubSecrets } from '../../src/config/logger';
+import { stillPrompt } from '../../src/providers/video/openaiImage';
 
 describe('narration style selection', () => {
   const scores = [
@@ -139,5 +140,26 @@ describe('pricing catalog migration', () => {
     expect((await getSettings('pricing')).entries.length).toBe(p.entries.length);
     await mongoose.connection.dropDatabase();
     await mongoose.disconnect();
+  });
+});
+
+describe('OpenAI still prompts', () => {
+  const scene = [
+    'SCENE 7. Epic style.',
+    'Ganesha resumes writing as Vyasa recites. Cut forward to Janamejaya’s brothers striking a young dog at a sacrifice.',
+    'Characters — Vyasa: elderly sage | Ganesha',
+    'Setting: Writing chamber, then the sacrificial ground. Camera: Slow push-in. Lighting: Warm. Mood: Calm.',
+    'Continuity: The final cut previews the next episode.',
+    'The scene illustrates this narration (do not render any text): "आगे सुनिए, कैसे जनमेजय के भाइयों…"',
+  ].join('\n');
+
+  it('keeps one moment and asks for a single frame, never a collage', () => {
+    const p = stillPrompt(scene, 'modern objects');
+    expect(p).toContain('ONE single continuous cinematic frame');
+    expect(p).toContain('Never a collage, split-screen, diptych');
+    expect(p).toContain('Ganesha resumes writing as Vyasa recites.');
+    expect(p).toContain('Characters — Vyasa');
+    expect(p).toContain('Avoid: modern objects.');
+    for (const gone of ['Cut forward', 'dog', 'then the sacrificial ground', 'Camera:', 'Continuity:', 'जनमेजय']) expect(p).not.toContain(gone);
   });
 });

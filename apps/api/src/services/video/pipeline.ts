@@ -39,6 +39,7 @@ import { toJsonSchema } from '../../lib/schema';
 import { getVideoProvider } from '../../providers/video/registry';
 import { resolveVideoModel } from '../../providers/video/resolve';
 import { MANUAL_MODEL, MANUAL_PROVIDER_ID } from '../../providers/video/manual';
+import { OPENAI_IMAGE_PROVIDER_ID, resolveImageModel } from '../../providers/video/openaiImage';
 import { segmentsFromWords, syntheticAlignment, wordsFromAlignment, type Segment } from './alignment';
 import { buildCues, loadFonts, toAss, toSrt, writeSubtitleOverlay } from './subtitles';
 import { probe } from './ffmpeg';
@@ -63,8 +64,14 @@ export async function resolveVideoSettings(partial: Partial<VideoGenerationSetti
     visualStyle: partial.visualStyle || VISUAL_STYLES[1]!.id,
     resolution: partial.resolution ?? google.videoResolution,
     videoProvider,
-    // A saved API model never applies to manual clips.
-    videoModel: videoProvider === MANUAL_PROVIDER_ID ? MANUAL_MODEL : partial.videoModel ?? google.videoModel,
+    // A saved Gemini model never applies to manual clips or OpenAI stills.
+    videoModel:
+      videoProvider === MANUAL_PROVIDER_ID
+        ? MANUAL_MODEL
+        : videoProvider === OPENAI_IMAGE_PROVIDER_ID
+          ? partial.videoModel || (await resolveImageModel())
+          : partial.videoModel ?? google.videoModel,
+    imageQuality: videoProvider === OPENAI_IMAGE_PROVIDER_ID ? partial.imageQuality ?? 'low' : undefined,
     musicTrackId: partial.musicTrackId || undefined,
     musicVolume: partial.musicVolume ?? render.musicVolume,
     sfxIntensity: partial.sfxIntensity ?? render.sfxIntensity,
@@ -329,6 +336,7 @@ Rules:
 - Every segment belongs to exactly one scene; scenes are contiguous and in order; together they cover all segments.
 - A scene should last ${caps.minClipSeconds}–${caps.maxClipSeconds} seconds of narration.
 - Visuals must literally depict what the narration says at that moment (specific characters, actions, places from the story), never generic filler.
+- Each scene is ONE continuous shot of ONE moment in ONE place: never write "cut to" or describe a second shot. If the narration of a scene covers two moments, show the more visual one (some providers render each scene as a single still image).
 - Keep characters, costumes, places and time of day consistent between scenes; state continuity explicitly.
 - Choose character variants (age versions) that fit this point in the story.
 - Vertical composition: subject centred, important action in the upper two-thirds. No on-screen text.`,
@@ -391,7 +399,7 @@ Rules:
       .filter(Boolean)
       .join('\n');
     const refHashes = await Promise.all(refs.map(async (r) => sha256(await storage().get(r.key))));
-    const cacheKey = stableHash({ prompt, refHashes, provider: providerId, model, aspect: '9:16', resolution: settings.resolution, avoid: visual.negativeGuidance, variation: settings.variation ?? 0 });
+    const cacheKey = stableHash({ prompt, refHashes, provider: providerId, model, aspect: '9:16', resolution: settings.resolution, quality: settings.imageQuality, stillMotion: providerId === OPENAI_IMAGE_PROVIDER_ID ? 2 : undefined, avoid: visual.negativeGuidance, variation: settings.variation ?? 0 });
     scenesOut.push({
       videoId: video._id,
       episodeId: ep._id,
@@ -425,7 +433,7 @@ Rules:
         $set: {
           ...s,
           ...(reusable
-            ? { status: 'completed', clipPath: cached!.clipPath, clipDuration: cached!.clipDuration, hasAudio: cached!.hasAudio, reusedFrom: cached!._id, cost: 0 }
+            ? { status: 'completed', clipPath: cached!.clipPath, stillPath: cached!.stillPath, clipDuration: cached!.clipDuration, hasAudio: cached!.hasAudio, reusedFrom: cached!._id, cost: 0 }
             : { status: 'pending', attempts: 0 }),
         },
         $unset: { error: 1 },
@@ -485,7 +493,7 @@ export async function generateScene(ctx: JobContext) {
     return null as unknown as Awaited<ReturnType<typeof findCached>>;
   }, { onWait: () => ctx.checkCancelled() });
   if (shared) {
-    Object.assign(scene, { status: 'completed', clipPath: shared.clipPath, clipDuration: shared.clipDuration, hasAudio: shared.hasAudio, reusedFrom: shared._id, cost: 0 });
+    Object.assign(scene, { status: 'completed', clipPath: shared.clipPath, stillPath: shared.stillPath, clipDuration: shared.clipDuration, hasAudio: shared.hasAudio, reusedFrom: shared._id, cost: 0 });
     await scene.save();
   }
   await afterScene(String(video._id));
@@ -496,7 +504,8 @@ async function produceScene(ctx: JobContext, scene: InstanceType<typeof VideoSce
   const caps = await provider.getCapabilities(video.model!);
   const clipSeconds = Math.min(caps.maxClipSeconds, Math.max(caps.minClipSeconds, scene.duration ?? caps.maxClipSeconds));
   const resolution = video.settings?.resolution ?? '720p';
-  const est = await provider.estimateCost(video.model!, clipSeconds, resolution);
+  const quality = video.settings?.imageQuality ?? undefined;
+  const est = await provider.estimateCost(video.model!, clipSeconds, resolution, quality);
   await assertBudget(est.amount ?? 0, video._id);
   await ctx.checkCancelled();
 
@@ -516,7 +525,7 @@ async function produceScene(ctx: JobContext, scene: InstanceType<typeof VideoSce
   refs.forEach((r, i) => (r.label = labels[i] ?? r.label));
   const visual = VISUAL_STYLES.find((v) => v.id === video.settings?.visualStyle) ?? VISUAL_STYLES[0]!;
 
-  let handle = await provider.generateVideo(video.model!, { prompt: scene.prompt, aspectRatio: '9:16', durationSeconds: clipSeconds, resolution, referenceImages: refs, avoid: visual.negativeGuidance }, ctx.usage);
+  let handle = await provider.generateVideo(video.model!, { prompt: scene.prompt, aspectRatio: '9:16', durationSeconds: clipSeconds, resolution, quality, referenceImages: refs, avoid: visual.negativeGuidance }, ctx.usage);
   const deadline = Date.now() + 20 * 60_000;
   while (handle.status === 'running' || (handle.uri && !handle.inline)) {
     const checked = await provider.checkStatus(video.model!, handle);
@@ -534,15 +543,43 @@ async function produceScene(ctx: JobContext, scene: InstanceType<typeof VideoSce
   }
   const bytes = await provider.downloadVideo(handle);
   const key = keys.sceneClip(String(video.sourceId), video.episodeNumber ?? 0, scene.cacheKey);
-  await storage().put(key, bytes);
+  let stillPath: string | undefined;
+  if (handle.inline?.mimeType.startsWith('image/')) {
+    // Still-image providers: keep the image, then animate it here at the render frame rate.
+    stillPath = keys.sceneStill(String(video.sourceId), video.episodeNumber ?? 0, scene.cacheKey);
+    await storage().put(stillPath, bytes);
+    await clipFromStill(await storage().localPath(stillPath), key, scene.duration ?? clipSeconds, !caps.visibleWatermark);
+  } else await storage().put(key, bytes);
   const info = await probe(await storage().localPath(key));
   if (!info.hasVideo || info.duration < 0.5) throw new ProviderError(`Scene ${scene.sceneNumber}: provider returned an invalid clip`, provider.id, true);
-  const cost = await recordUsage(
-    { category: 'video', provider: 'google', model: video.model!, operation: `scene:${scene.sceneNumber}`, quantity: info.duration, unit: 'second', variant: resolution },
-    ctx.usage,
-  );
-  Object.assign(scene, { status: 'completed', clipPath: key, clipDuration: info.duration, hasAudio: info.hasAudio, cost, providerMeta: { id: handle.providerJobId }, error: undefined });
+  // Providers that bill per request record their own usage and report the cost on the handle.
+  const providerCost = handle.meta?.cost;
+  const cost =
+    typeof providerCost === 'number'
+      ? providerCost
+      : await recordUsage(
+          { category: 'video', provider: 'google', model: video.model!, operation: `scene:${scene.sceneNumber}`, quantity: info.duration, unit: 'second', variant: resolution },
+          ctx.usage,
+        );
+  Object.assign(scene, { status: 'completed', clipPath: key, stillPath, clipDuration: info.duration, hasAudio: info.hasAudio, cost, providerMeta: { id: handle.providerJobId, ...(stillPath ? { kind: 'image' } : {}) }, error: undefined });
   await scene.save();
+}
+
+/**
+ * Animates a still into the scene clip stored at `key`: rendered at the output frame rate and long enough for
+ * the scene's slot even after tempo adjustment and the transition, so the renderer never stretches it.
+ */
+async function clipFromStill(image: string, key: string, sceneDuration: number, fill: boolean) {
+  const render = await getSettings('render');
+  const work = await fs.mkdtemp(path.join(os.tmpdir(), 'mas-still-'));
+  try {
+    const out = path.join(work, 'still.mp4');
+    const length = Math.max(2, sceneDuration) * (1 + render.maxSpeedAdjust) + render.transitionDuration + 0.8;
+    await stillToClip(image, out, length, { fill, fps: render.fps });
+    await storage().putFile(key, out, { move: true });
+  } finally {
+    await fs.rm(work, { recursive: true, force: true });
+  }
 }
 
 async function afterScene(videoId: string) {
@@ -587,7 +624,7 @@ export async function renderVideoJob(ctx: JobContext) {
   const timeline = scenes.map((s, i) => {
     const start = (i === 0 ? 0 : s.startTime!) / tempo;
     const end = i < scenes.length - 1 ? scenes[i + 1]!.startTime! / tempo : total;
-    return { clipPath: s.clipPath!, duration: Math.max(0.4, end - start) };
+    return { clipPath: s.clipPath!, duration: Math.max(0.4, end - start), still: !!s.stillPath };
   });
 
   const work = await fs.mkdtemp(path.join(os.tmpdir(), `mas-render-${video._id}-`));
@@ -733,21 +770,17 @@ export async function uploadSceneClip(videoId: string, sceneNumber: number, file
   if (!scene) throw notFound('Scene');
   if (scene.status === 'generating') throw conflict('Scene is being generated');
   const isImage = file.mimeType.startsWith('image/') || /\.(jpe?g|png|webp)$/i.test(file.originalName);
-  let clipFile = file.path;
-  let work: string | null = null;
-  try {
-    if (isImage) {
-      // A still becomes a slow zoom clip as long as the scene (plus a little room for the transition).
-      work = await fs.mkdtemp(path.join(os.tmpdir(), 'mas-still-'));
-      clipFile = path.join(work, 'still.mp4');
-      await stillToClip(file.path, clipFile, Math.max(2, scene.duration ?? 6) + 0.3).catch(() => {
-        throw new AppError('The image could not be read', 422, 'INVALID_CLIP');
-      });
-    }
-    return await attachClip(video, scene, clipFile, { uploaded: true, fileName: file.originalName, kind: isImage ? 'image' : 'video', uploadedAt: new Date() });
-  } finally {
-    if (work) await fs.rm(work, { recursive: true, force: true });
-  }
+  const meta = { uploaded: true, fileName: file.originalName, kind: isImage ? 'image' : 'video', uploadedAt: new Date() };
+  if (!isImage) return attachClip(video, scene, file.path, meta);
+  // A still becomes a slow zoom clip. The image is kept whole (never cropped), so a visible watermark stays.
+  const id = `u${sha256(await fs.readFile(file.path))}`;
+  const stillPath = keys.sceneStill(String(video.sourceId), video.episodeNumber ?? 0, id).replace(/\.png$/, path.extname(file.originalName).toLowerCase() || '.png');
+  const clipKey = keys.sceneClip(String(video.sourceId), video.episodeNumber ?? 0, id);
+  await storage().putFile(stillPath, file.path, { move: true });
+  await clipFromStill(await storage().localPath(stillPath), clipKey, scene.duration ?? 6, false).catch(() => {
+    throw new AppError('The image could not be read', 422, 'INVALID_CLIP');
+  });
+  return attachClip(video, scene, await storage().localPath(clipKey), meta, { stillPath, key: clipKey });
 }
 
 async function attachClip(
@@ -755,14 +788,19 @@ async function attachClip(
   scene: InstanceType<typeof VideoSceneModel>,
   clipFile: string,
   meta: Record<string, unknown>,
+  stored?: { stillPath: string; key: string },
 ) {
   const info = await probe(clipFile).catch(() => null);
   if (!info?.hasVideo || info.duration < 0.5) throw new AppError('The file is not a playable video clip or image', 422, 'INVALID_CLIP');
-  const key = keys.sceneClip(String(video.sourceId), video.episodeNumber ?? 0, `u${sha256(await fs.readFile(clipFile))}`);
-  await storage().putFile(key, clipFile, { move: true });
+  let key = stored?.key;
+  if (!key) {
+    key = keys.sceneClip(String(video.sourceId), video.episodeNumber ?? 0, `u${sha256(await fs.readFile(clipFile))}`);
+    await storage().putFile(key, clipFile, { move: true });
+  }
   Object.assign(scene, {
     status: 'completed',
     clipPath: key,
+    stillPath: stored?.stillPath,
     clipDuration: info.duration,
     hasAudio: info.hasAudio,
     cost: 0,

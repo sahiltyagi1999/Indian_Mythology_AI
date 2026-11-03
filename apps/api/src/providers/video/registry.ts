@@ -1,6 +1,7 @@
 import { ProviderError } from '../../lib/errors';
 import { GeminiOmniVideoProvider } from './geminiOmni';
 import { ManualVideoProvider } from './manual';
+import { OpenAIImageVideoProvider } from './openaiImage';
 import type { VideoProvider } from './types';
 
 const providers = new Map<string, VideoProvider>();
@@ -11,6 +12,7 @@ export function registerVideoProvider(p: VideoProvider) {
 
 registerVideoProvider(new GeminiOmniVideoProvider());
 registerVideoProvider(new ManualVideoProvider());
+registerVideoProvider(new OpenAIImageVideoProvider());
 
 export function listVideoProviders(): VideoProvider[] {
   return [...providers.values()];

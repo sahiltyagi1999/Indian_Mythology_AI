@@ -6,6 +6,8 @@ export interface RenderScene {
   clipPath: string;
   /** Seconds this scene occupies on the final timeline. */
   duration: number;
+  /** Clip made from a still image: it already has its own smooth zoom, so no extra push-in. */
+  still?: boolean;
 }
 
 export interface RenderInput {
@@ -52,21 +54,28 @@ function fitFilter(input: string, out: string) {
 }
 
 /**
- * Turns a still image into a scene clip: the whole image slowly grows from 90% to 100% of the frame over a
- * blurred copy of itself. The image is never cropped, so a visible watermark on it stays visible.
+ * Turns a still image into a scene clip. By default the whole image slowly grows from 90% to 100% of the frame
+ * over a blurred copy of itself and is never cropped, so a visible watermark on it stays visible. With `fill`
+ * (images without a visible watermark) it fills the 9:16 frame and slowly pushes in by 8%.
  */
-export async function stillToClip(image: string, dest: string, length: number, fps = 24) {
-  const t = length.toFixed(3);
+export async function stillToClip(image: string, dest: string, length: number, opts: { fill?: boolean; fps?: number } = {}) {
+  const fps = opts.fps ?? 30;
+  const frames = Math.max(2, Math.round(length * fps));
+  // The zoom runs on a 4× canvas so each frame moves by a fraction of an output pixel (no stepping), at the
+  // render frame rate so no frames are duplicated later.
+  const zoomTo = opts.fill ? 1.08 : 1.11;
+  const base = opts.fill
+    ? `[0:v]scale=${W * 4}:${H * 4}:force_original_aspect_ratio=increase:flags=lanczos,crop=${W * 4}:${H * 4}[canvas]`
+    : `[0:v]split=2[bgsrc][fgsrc];` +
+      `[bgsrc]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},boxblur=28:2,eq=brightness=-0.06[bg];` +
+      // 90% of the fitted size; zooming to 1.11 brings it to the full frame without ever cropping the image.
+      `[fgsrc]scale=${Math.round(W * 0.9)}:${Math.round(H * 0.9)}:force_original_aspect_ratio=decrease:flags=lanczos[fg];` +
+      `[bg][fg]overlay=(W-w)/2:(H-h)/2,scale=${W * 4}:${H * 4}:flags=lanczos[canvas]`;
+  const graph =
+    `${base};[canvas]zoompan=z='1+${(zoomTo - 1).toFixed(4)}*on/${frames - 1}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=${W}x${H}:fps=${fps},` +
+    `setsar=1,format=yuv420p[v]`;
   await ffmpeg(
-    [
-      '-loop', '1', '-framerate', String(fps), '-t', t, '-i', image,
-      '-filter_complex',
-      `[0:v]split=2[bgsrc][fgsrc];` +
-        `[bgsrc]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},boxblur=28:2,eq=brightness=-0.06[bg];` +
-        `[fgsrc]scale=${W}:${H}:force_original_aspect_ratio=decrease,scale=w='trunc(iw*(0.9+0.1*t/${t})/2)*2':h=-2:eval=frame[fg];` +
-        `[bg][fg]overlay=(W-w)/2:(H-h)/2:eval=frame,setsar=1,format=yuv420p[v]`,
-      '-map', '[v]', '-r', String(fps), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-an', '-movflags', '+faststart', dest,
-    ],
+    ['-i', image, '-filter_complex', graph, '-map', '[v]', '-frames:v', String(frames), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '14', '-an', '-movflags', '+faststart', dest],
     { timeoutMs: 5 * 60_000 },
   );
 }
@@ -99,7 +108,7 @@ export async function renderVideo(input: RenderInput) {
     const s = input.scenes[i]!;
     const len = s.duration + (i < n - 1 ? T : 0);
     const dest = path.join(input.workDir, `scene-${String(i + 1).padStart(2, '0')}.mp4`);
-    await normalizeClip(s.clipPath, dest, len, input);
+    await normalizeClip(s.clipPath, dest, len, { ...input, allowPushIn: input.allowPushIn && !s.still });
     normalized.push(dest);
     input.onProgress?.((i + 1) / n * 0.5, `normalising scene ${i + 1}/${n}`);
   }

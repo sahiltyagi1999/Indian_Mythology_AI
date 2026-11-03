@@ -52,12 +52,14 @@ export async function estimateBatch(episodeIds: string[], settings: VideoGenerat
   const ttsPrice = ttsModel ? await lookupPrice({ provider: 'elevenlabs', model: ttsModel, unit: '1k_characters' }) : { price: null };
   if (ttsModel && ttsPrice.price === null) warnings.push(`No price for ElevenLabs model ${ttsModel}; add it in Settings → Pricing`);
   let videoUnit: number | null = null;
+  let perImage = false;
   let caps: Awaited<ReturnType<ReturnType<typeof getVideoProvider>['getCapabilities']>> | null = null;
   if (videoModel) {
     const provider = getVideoProvider(videoProvider);
     caps = await provider.getCapabilities(videoModel);
-    const e = await provider.estimateCost(videoModel, 1, settings.resolution);
+    const e = await provider.estimateCost(videoModel, 1, settings.resolution, settings.imageQuality);
     videoUnit = e.unitPrice;
+    perImage = e.unit === 'image';
     if (e.note) warnings.push(e.note);
   }
   const tIn = textModel ? await lookupPrice({ provider: textProvider, model: textModel, unit: 'input_1m_tokens' }) : { price: null };
@@ -85,13 +87,16 @@ export async function estimateBatch(episodeIds: string[], settings: VideoGenerat
     videoSeconds += epVideoSeconds;
     clips += sceneCount;
     renderSeconds += duration * renderRatio;
-    const total = (epChars / 1000) * (ttsPrice.price ?? 0) + epVideoSeconds * (videoUnit ?? 0) + (3000 * (tIn.price ?? 0) + 2500 * (tOut.price ?? 0)) / 1e6;
+    const epVideoCost = (perImage ? sceneCount : epVideoSeconds) * (videoUnit ?? 0);
+    const total = (epChars / 1000) * (ttsPrice.price ?? 0) + epVideoCost + (3000 * (tIn.price ?? 0) + 2500 * (tOut.price ?? 0)) / 1e6;
     perEpisode.push({ episodeId: String(ep._id), episodeNumber: ep.episodeNumber, total: round(total), reusedAssets: reused });
   }
 
   const lines: CostLine[] = [
     { category: 'narration', label: `ElevenLabs narration (${ttsModel || 'unresolved'})`, quantity: chars, unit: 'characters', unitPrice: ttsPrice.price ?? 0, amount: round((chars / 1000) * (ttsPrice.price ?? 0)), note: 'per 1k characters; cached audio is reused' },
-    { category: 'video', label: `Scene video (${videoModel || 'unresolved'}, ${settings.resolution})`, quantity: round(videoSeconds), unit: 'seconds', unitPrice: videoUnit ?? 0, amount: round(videoSeconds * (videoUnit ?? 0)), note: `${clips} clips; clip length is decided by the model (${caps?.minClipSeconds ?? '?'}–${caps?.maxClipSeconds ?? '?'}s)` },
+    perImage
+      ? { category: 'video', label: `Scene images (${videoModel}, ${settings.imageQuality ?? 'low'} quality)`, quantity: clips, unit: 'images', unitPrice: videoUnit ?? 0, amount: round(clips * (videoUnit ?? 0)), note: 'one image per scene, animated with a slow zoom; actual cost is taken from the tokens OpenAI reports' }
+      : { category: 'video', label: `Scene video (${videoModel || 'unresolved'}, ${settings.resolution})`, quantity: round(videoSeconds), unit: 'seconds', unitPrice: videoUnit ?? 0, amount: round(videoSeconds * (videoUnit ?? 0)), note: `${clips} clips; clip length is decided by the model (${caps?.minClipSeconds ?? '?'}–${caps?.maxClipSeconds ?? '?'}s)` },
     { category: 'text', label: `Scene planning (${textModel || 'unresolved'})`, quantity: eps.length * 5500, unit: 'tokens', unitPrice: tOut.price ?? 0, amount: round((eps.length * (3000 * (tIn.price ?? 0) + 2500 * (tOut.price ?? 0))) / 1e6) },
     { category: 'rendering', label: 'Local FFmpeg rendering', quantity: Math.round(renderSeconds), unit: 'seconds', unitPrice: 0, amount: 0, note: 'runs on this machine' },
     { category: 'storage', label: 'Local storage (~60 MB per episode)', quantity: eps.length * 60, unit: 'MB', unitPrice: 0, amount: 0 },

@@ -137,6 +137,11 @@ const oai = (model: string, input: number, cached: number, output: number, note?
   { provider: 'openai', model, category: 'text', unit: 'cached_input_1m_tokens', price: cached, source: OPENAI_PRICING_URL, verified: true, note },
   { provider: 'openai', model, category: 'text', unit: 'output_1m_tokens', price: output, source: OPENAI_PRICING_URL, verified: true, note },
 ];
+/** gpt-image models bill text prompt tokens and image output tokens; per-image cost depends on quality and size. */
+const oaiImage = (model: string, textInput: number, imageOutput: number): PricingEntry[] => [
+  { provider: 'openai', model, category: 'video', unit: 'input_1m_tokens', price: textInput, source: OPENAI_PRICING_URL, verified: true, note: 'Text prompt tokens' },
+  { provider: 'openai', model, category: 'video', unit: 'output_1m_tokens', price: imageOutput, source: OPENAI_PRICING_URL, verified: true, note: 'Image output tokens' },
+];
 const LONG = 'Standard rate for prompts ≤272K input tokens (longer prompts bill 2× input, 1.5× output)';
 const ELEVEN_PRICING_URL = 'https://elevenlabs.io/pricing/api';
 
@@ -187,6 +192,11 @@ export const DEFAULT_PRICING: PricingSettings = {
     ...oai('gpt-5.6-terra', 2, 0.2, 12),
     ...oai('gpt-5.6-luna', 0.2, 0.02, 1.2),
     ...oai('gpt-5.4-mini', 0.75, 0.075, 4.5),
+    ...oaiImage('gpt-image-2', 5, 30),
+    ...oaiImage('gpt-image-2.5-flare', 5, 30),
+    ...oaiImage('gpt-image-2.5-sunburst', 5, 30),
+    ...oaiImage('gpt-image-1.5', 5, 32),
+    ...oaiImage('gpt-image-1-mini', 2, 8),
     { provider: 'openai', model: 'text-embedding-3-small', category: 'embedding', unit: 'input_1m_tokens', price: 0.02, source: OPENAI_PRICING_URL, verified: true },
     { provider: 'openai', model: 'text-embedding-3-large', category: 'embedding', unit: 'input_1m_tokens', price: 0.13, source: OPENAI_PRICING_URL, verified: true },
     { provider: 'elevenlabs', model: 'eleven_v4', category: 'narration', unit: '1k_characters', price: 0.08, source: ELEVEN_PRICING_URL, verified: true },

@@ -25,6 +25,7 @@ export const keys = {
   narration: (sourceId: string, ep: number, cacheKey: string) => `projects/${sourceId}/episodes/${pad(ep)}/audio/${cacheKey.slice(0, 16)}.mp3`,
   alignment: (sourceId: string, ep: number, cacheKey: string) => `projects/${sourceId}/episodes/${pad(ep)}/audio/${cacheKey.slice(0, 16)}.alignment.json`,
   sceneClip: (sourceId: string, ep: number, cacheKey: string) => `projects/${sourceId}/episodes/${pad(ep)}/scenes/${cacheKey.slice(0, 20)}.mp4`,
+  sceneStill: (sourceId: string, ep: number, cacheKey: string) => `projects/${sourceId}/episodes/${pad(ep)}/scenes/${cacheKey.slice(0, 20)}.png`,
   render: (sourceId: string, ep: number, videoId: string, file: string) => `projects/${sourceId}/episodes/${pad(ep)}/renders/${videoId}/${file}`,
   characterImage: (characterId: string, file: string) => `characters/${characterId}/${file}`,
   music: (trackId: string, ext: string) => `library/music/${trackId}${ext}`,

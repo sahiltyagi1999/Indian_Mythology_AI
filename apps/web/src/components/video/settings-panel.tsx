@@ -80,6 +80,19 @@ export function VideoSettingsPanel({ value, onChange, concurrency, onConcurrency
             />
           </Field>
         </div>
+        {value.videoProvider === 'openai-image' && (
+          <Field label="Image quality" hint="One image per scene with a smooth slow zoom. Roughly $0.007 / $0.04 / $0.17 per image (low / medium / high).">
+            <SimpleSelect
+              value={value.imageQuality ?? 'low'}
+              onValueChange={(v) => set({ imageQuality: v as 'low' | 'medium' | 'high' })}
+              options={[
+                { value: 'low', label: 'Low (cheapest)' },
+                { value: 'medium', label: 'Medium' },
+                { value: 'high', label: 'High' },
+              ]}
+            />
+          </Field>
+        )}
         <Field label="Video model" hint={caps ? `${caps.minClipSeconds}–${caps.maxClipSeconds}s clips · ${caps.aspectRatios.join(', ')} · ${caps.watermark}` : 'Leave empty to use the model configured in settings'}>
           <Input value={value.videoModel} onChange={(e) => set({ videoModel: e.target.value })} placeholder={providers.data?.selected.model || 'Auto (from settings)'} />
         </Field>

@@ -229,6 +229,8 @@ export interface VideoGenerationSettings {
   resolution: '720p' | '1080p';
   videoProvider: string;
   videoModel: string;
+  /** Still-image providers (openai-image): low | medium | high. */
+  imageQuality?: 'low' | 'medium' | 'high';
   musicTrackId?: string;
   musicVolume: number;
   sfxIntensity: number;

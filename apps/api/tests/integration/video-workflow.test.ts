@@ -207,6 +207,8 @@ describe('Workflow B — batch video generation', () => {
     const stillInfo = await probe(await storage().localPath(img.body.scene.clipPath));
     expect([stillInfo.width, stillInfo.height]).toEqual([1080, 1920]);
     expect(stillInfo.duration).toBeGreaterThanOrEqual(scenes[0]!.duration!);
+    expect(stillInfo.fps).toBe(24);
+    expect(img.body.scene.stillPath).toMatch(/\.png$/);
     for (const s of scenes.slice(1)) await request(h.app).post(`/api/videos/${vid}/scenes/${s.sceneNumber}/clip`).attach('file', state.videoClipPath!).expect(200);
 
     const done = await waitFor(async () => {
@@ -218,6 +220,43 @@ describe('Workflow B — batch video generation', () => {
     const uploaded = await VideoSceneModel.findOne({ videoId: vid, sceneNumber: 1 }).lean();
     expect((uploaded!.providerMeta as any).uploaded).toBe(true);
   }, 180_000);
+
+  it('OpenAI images: one still per scene, priced per image, rendered automatically', async () => {
+    const imgSettings = { ...settings, videoProvider: 'openai-image', imageQuality: 'low' };
+    const est = await request(h.app).post('/api/batches/estimate').send({ episodeIds: [episodeIds[2]], settings: imgSettings });
+    const line = est.body.lines.find((l: any) => l.category === 'video');
+    expect(line.label).toContain('gpt-image-2');
+    expect(line.unit).toBe('images');
+    expect(line.amount).toBeGreaterThan(0);
+    expect(line.amount).toBeLessThan(0.1);
+
+    state.imageRequests = [];
+    const res = await request(h.app).post('/api/batches').send({ episodeIds: [episodeIds[2]], settings: imgSettings, confirm: true, idempotencyKey: 'batch-oai-img-0001' });
+    expect(res.status).toBe(201);
+    const vid = res.body.videos[0]._id;
+    const done = await waitFor(async () => {
+      const v = await VideoAssetModel.findById(vid).lean();
+      if (v?.status === 'failed') throw new Error(`video failed: ${v.error}`);
+      return v?.status === 'completed' ? v : null;
+    }, { timeout: 180_000, interval: 1000, label: 'image video rendered' });
+
+    expect(done.model).toBe('gpt-image-2');
+    const scenes = await VideoSceneModel.find({ videoId: vid }).lean();
+    expect(state.imageRequests).toHaveLength(scenes.length);
+    expect(state.imageRequests!.every((r) => r.model === 'gpt-image-2' && r.quality === 'low' && r.size === '1024x1536')).toBe(true);
+    expect(state.imageRequests![0]!.prompt).not.toContain('Camera:');
+    const usage = await UsageRecordModel.find({ videoId: vid, category: 'video' }).lean();
+    expect(usage).toHaveLength(scenes.length);
+    expect(usage.every((u) => u.provider === 'openai' && u.pricingSource === 'catalog' && u.cost > 0)).toBe(true);
+    const clip = await probe(await storage().localPath(scenes[0]!.clipPath!));
+    expect([clip.width, clip.height]).toEqual([1080, 1920]);
+    // Animated at the render frame rate (24 in this suite) and long enough that the renderer never stretches it.
+    expect(clip.fps).toBe(24);
+    expect(clip.duration).toBeGreaterThan(scenes[0]!.duration!);
+    expect(scenes.every((s) => s.stillPath && s.stillPath.endsWith('.png'))).toBe(true);
+    expect(await storage().exists(scenes[0]!.stillPath!)).toBe(true);
+    expect(await storage().exists(done.videoPath!)).toBe(true);
+  }, 240_000);
 
   it('editing an approved script invalidates narration but keeps old videos', async () => {
     const ep = await EpisodeModel.findById(episodeIds[4]).lean();

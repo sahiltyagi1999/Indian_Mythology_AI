@@ -29,6 +29,8 @@ export interface VideoGenerationRequest {
   resolution: string;
   referenceImages?: { data: Buffer; mimeType: string; label: string }[];
   avoid?: string;
+  /** Still-image providers only: low | medium | high. */
+  quality?: string;
 }
 
 export interface VideoJobHandle {
@@ -57,5 +59,6 @@ export interface VideoProvider {
   generateVideo(model: string, req: VideoGenerationRequest, ctx?: UsageContext): Promise<VideoJobHandle>;
   checkStatus(model: string, handle: VideoJobHandle): Promise<VideoJobHandle>;
   downloadVideo(handle: VideoJobHandle): Promise<Buffer>;
-  estimateCost(model: string, seconds: number, resolution: string): Promise<CostEstimateLine>;
+  /** unit 'second' prices generated seconds; unit 'image' prices one image per scene. */
+  estimateCost(model: string, seconds: number, resolution: string, quality?: string): Promise<CostEstimateLine>;
 }

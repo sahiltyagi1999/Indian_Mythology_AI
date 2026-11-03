@@ -15,9 +15,13 @@ export interface StubState {
   ttsAudioPath?: string;
   ttsDuration?: number;
   sceneCalls: number;
+  imageRequests?: { model: string; size: string; quality: string; prompt: string }[];
 }
 
 export const state: StubState = { calls: {}, failScenes: new Set(), sceneCalls: 0 };
+
+// 4×6 px PNG; the renderer scales it to 1080×1920.
+const TINY_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAQAAAAGCAIAAABrW6giAAAACXBIWXMAAAABAAAAAQBPJcTWAAAAE0lEQVR4nGP8u5QBDlgYGCjjAACAvQG48phcqwAAAABJRU5ErkJggg==';
 
 function bump(k: string) {
   state.calls[k] = (state.calls[k] ?? 0) + 1;
@@ -221,8 +225,8 @@ function handleOpenAI(req: http.IncomingMessage, raw: string, res: http.ServerRe
   if (req.method === 'GET' && p === '/models') {
     return respond(res, 200, {
       object: 'list',
-      data: ['gpt-6.1-sol', 'gpt-6.1-sol-2026-09-01', 'gpt-6.1-terra', 'gpt-6-luna', 'gpt-5.6-luna', 'gpt-5', 'text-embedding-3-small'].map((id, i) => ({
-        id, object: 'model', created: 1_780_000_000 - i, owned_by: 'openai', shutdown_date: id === 'gpt-5' ? '2026-12-11' : null,
+      data: ['gpt-6.1-sol', 'gpt-6.1-sol-2026-09-01', 'gpt-6.1-terra', 'gpt-6-luna', 'gpt-5.6-luna', 'gpt-5', 'text-embedding-3-small', 'gpt-image-2', 'gpt-image-2.5-flare', 'gpt-image-1'].map((id, i) => ({
+        id, object: 'model', created: 1_780_000_000 - i, owned_by: 'openai', shutdown_date: id === 'gpt-5' ? '2026-12-11' : id === 'gpt-image-1' ? '2026-10-23' : null,
       })),
     });
   }
@@ -240,6 +244,18 @@ function handleOpenAI(req: http.IncomingMessage, raw: string, res: http.ServerRe
       id: 'resp_stub', object: 'response', status: 'completed', model: body.model,
       output: [{ type: 'reasoning', id: 'rs_1', summary: [] }, { type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text, annotations: [] }] }],
       usage: { input_tokens: 1500, input_tokens_details: { cached_tokens: 500 }, output_tokens: 600, output_tokens_details: { reasoning_tokens: 200 }, total_tokens: 2100 },
+    });
+  }
+  if (req.method === 'POST' && p === '/images/generations') {
+    bump('openai:images');
+    const body = JSON.parse(raw);
+    (state.imageRequests ??= []).push({ model: body.model, size: body.size, quality: body.quality, prompt: body.prompt });
+    if (/BLOCK_ME/.test(body.prompt)) return respond(res, 400, { error: { message: 'Your request was rejected by the safety system (moderation_blocked).', code: 'moderation_blocked' } });
+    const outTokens = body.quality === 'low' ? 170 : body.quality === 'high' ? 5500 : 1370;
+    return respond(res, 200, {
+      created: 1_790_000_000,
+      data: [{ b64_json: TINY_PNG }],
+      usage: { input_tokens: 300, input_tokens_details: { text_tokens: 300, image_tokens: 0 }, output_tokens: outTokens, total_tokens: 300 + outTokens },
     });
   }
   if (req.method === 'POST' && p === '/embeddings') {

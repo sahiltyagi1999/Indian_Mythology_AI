@@ -56,6 +56,7 @@ export const settingsSchema = z
     resolution: z.enum(['720p', '1080p']),
     videoProvider: z.string().max(60),
     videoModel: z.string().max(100),
+    imageQuality: z.enum(['low', 'medium', 'high']),
     musicTrackId: z.string().max(40).optional(),
     musicVolume: z.number().min(0).max(1),
     sfxIntensity: z.number().min(0).max(1),

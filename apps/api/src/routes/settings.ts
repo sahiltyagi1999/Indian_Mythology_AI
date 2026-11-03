@@ -9,6 +9,7 @@ import { textProvider } from '../providers/llm';
 import * as eleven from '../providers/tts/elevenlabs';
 import { getVideoProvider, listVideoProviders } from '../providers/video/registry';
 import { MANUAL_MODEL, MANUAL_PROVIDER_ID } from '../providers/video/manual';
+import { OPENAI_IMAGE_PROVIDER_ID, resolveImageModel } from '../providers/video/openaiImage';
 import { discoverVideoModels, resolveVideoModel } from '../providers/video/resolve';
 import { recordUsage } from '../services/cost/usage';
 import { storage } from '../storage';
@@ -219,7 +220,8 @@ settingsRouter.get(
     const s = await getSettings('google');
     const providers = await Promise.all(
       listVideoProviders().map(async (p) => {
-        const model = p.id === MANUAL_PROVIDER_ID ? MANUAL_MODEL : s.videoModel;
+        const model =
+          p.id === MANUAL_PROVIDER_ID ? MANUAL_MODEL : p.id === OPENAI_IMAGE_PROVIDER_ID ? await resolveImageModel().catch(() => '') : s.videoModel;
         return { id: p.id, label: p.label, capabilities: model ? await p.getCapabilities(model) : null };
       }),
     );

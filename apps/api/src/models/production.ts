@@ -49,6 +49,7 @@ const videoSettingsSchema = new Schema(
     resolution: String,
     videoProvider: String,
     videoModel: String,
+    imageQuality: String,
     musicTrackId: String,
     musicVolume: Number,
     sfxIntensity: Number,
@@ -127,6 +128,8 @@ const videoSceneSchema = new Schema(
     cacheKey: { type: String, required: true },
     status: { type: String, enum: SCENE_STATUSES, default: 'pending' },
     clipPath: String,
+    /** Source image for scenes made from a still (kept so the motion can be redone without regenerating). */
+    stillPath: String,
     clipDuration: Number,
     hasAudio: Boolean,
     attempts: { type: Number, default: 0 },
